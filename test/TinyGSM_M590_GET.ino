@@ -9,7 +9,6 @@
 #define TINY_GSM_YIELD() { delay(2); }
 #define TINY_GSM_RX_BUFFER 650
 #define TINY_GSM_USE_GPRS true
-#define TINY_GSM_USE_WIFI false
 #define GSM_PIN ""  // set GSM PIN, if any
 
 // Your GPRS credentials, if any
@@ -17,11 +16,8 @@ const char apn[]      = "default";
 const char gprsUser[] = "";
 const char gprsPass[] = "";
 
-// Your WiFi connection credentials, if applicable
-const char wifiSSID[] = "YourSSID";
-const char wifiPass[] = "YourWiFiPass";
 
-// Server details
+// Server details vsh.pp.ua/TinyGSM/logo.txt
 const int      port = 80;
 const char server[]   = "vsh.pp.ua";
 const char resource[] = "/TinyGSM/logo.txt";
@@ -60,22 +56,6 @@ void setup() {
 }
 
 void loop() {
-#if TINY_GSM_USE_WIFI
-  // Wifi connection parameters must be set before waiting for the network
-  SerialMon.print(F("Setting SSID/password..."));
-  if (!modem.networkConnect(wifiSSID, wifiPass)) {
-    SerialMon.println(" fail");
-    delay(10000);
-    return;
-  }
-  SerialMon.println(" success");
-#endif
-
-#if TINY_GSM_USE_GPRS && defined TINY_GSM_MODEM_XBEE
-  // The XBee must run the gprsConnect function BEFORE waiting for network!
-  modem.gprsConnect(apn, gprsUser, gprsPass);
-#endif
-
   SerialMon.print("Waiting for network...");
   if (!modem.waitForNetwork()) {
     SerialMon.println(" fail");
@@ -132,14 +112,9 @@ void loop() {
   client.stop();
   SerialMon.println(F("Server disconnected"));
 
-#if TINY_GSM_USE_WIFI
-  modem.networkDisconnect();
-  SerialMon.println(F("WiFi disconnected"));
-#endif
-#if TINY_GSM_USE_GPRS
   modem.gprsDisconnect();
   SerialMon.println(F("GPRS disconnected"));
-#endif
+
 
   // Do nothing forevermore
   while (true) { delay(1000); }
