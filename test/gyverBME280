@@ -1,0 +1,38 @@
+/*
+   Простой пример, демонстрирующий основные функции измерения температуры, давления и влажности
+*/
+
+#include <GyverBME280.h>                      // Подключение библиотеки
+GyverBME280 bme;                              // Создание обьекта bme
+
+
+int32_t bmeTemp = 0;
+int32_t bmeHum = 0;
+int32_t bmePres = 0;
+int32_t bmeAlt = 0;
+void setup() {
+  Serial.begin(115200);                         // Запуск последовательного порта
+  bme.begin();                                // Если доп. настройки не нужны  - инициализируем датчик
+}
+
+void loop() {
+  Serial.print("Temp: ");
+  bmeTemp = bme.readTemperature();
+  Serial.print(bmeTemp);        // Выводим темперутуру в [*C]
+  Serial.print(" *C\t");
+
+  Serial.print("Hum: ");
+  bmeHum = bme.readHumidity();
+  Serial.print(bmeHum);           // Выводим влажность в [%]
+  Serial.print(" %\tPress: ");
+
+  float pressure = bme.readPressure();        // Читаем давление в [Па]
+  bmePres = pressureToMmHg(pressure);
+  Serial.print(bmePres);     // Выводим давление в [мм рт. столба]
+  Serial.print(" mm Hg\t");
+  bmeAlt =pressureToAltitude(pressure);
+  Serial.print("Altitide: ");
+  Serial.print(bmeAlt); // Выводим высоту в [м над ур. моря]
+  Serial.println(" m");
+  delay(1000);
+}//loop()
