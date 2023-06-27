@@ -3,6 +3,10 @@
 
 
 #include <Arduino.h>
+#include <WiFi.h>
+const char* ssid = "kuso4ek_raya";
+const char* password = "1234567812345678";
+
 #include <PMS.h>
 #define RX1_PIN 4 //25
 #define TX1_PIN 5 //26
@@ -20,8 +24,8 @@ int16_t bmeAlt = 0;
 
 #define LUM_PIN 34 // ADC6 освнещенность снаружи
 #define LUM_POWER_PIN 32 // подтяжка к плюсу фоторезистора
-uint16_t lum = 0; // освещенность
-
+uint32_t lum = 0; // освещенность
+#define LED_PIN 2 
 
 //********  MODEM   *********// 
 #define TINY_GSM_MODEM_M590
@@ -49,16 +53,22 @@ TinyGsmClient client(modem);
 
 
 
-//**********   MQTT   **********//
+//**********   MQTT for gsm   **********//
 IPAddress MQTTserver(95, 142, 87, 232); // Фарика сервак
 const char* broker = "95.142.87.232";
 const char* topicLed = "GsmClientTest/led";
 const char* topicInit = "GsmClientTest/init";
 const char* topicLedStatus = "GsmClientTest/ledStatus";
 #include <PubSubClient.h>
-PubSubClient  mqtt(MQTTserver, 1883, mqttCallback, client);
+PubSubClient  mqtt(client);
 
-
+//**********   MQTT for wifi   **********//
+const char* mqtt_server = "95.142.87.232";
+WiFiClient espClient;
+PubSubClient wifiMQTTclient(espClient);
+long lastMsg = 0;
+char msg[50];
+int value = 0;
 
 
 /***************************************/
@@ -68,6 +78,10 @@ PubSubClient  mqtt(MQTTserver, 1883, mqttCallback, client);
 void modemPingPong();
 void srvGETconnection();
 void mqttCallback(char* topic, byte* payload, unsigned int len);
+void setup_wifi();
+void wifiMqttCallback(char* topic, byte* message, unsigned int length);
+void reconnectMQTTwifi();
+
 
 
 /***************************************/
@@ -90,7 +104,16 @@ void setup() {
 
   bme.begin();
 
-  modem.setBaud(57600);
+  setup_wifi();
+
+  wifiMQTTclient.setServer(mqtt_server, 1883);
+  wifiMQTTclient.setCallback(wifiMqttCallback);
+
+  pinMode(LED_PIN, OUTPUT);
+
+
+  /* // инициализация GSM модема
+   modem.setBaud(57600);
   pinMode(MODEM_RESET, OUTPUT); // для сброса модема даем ноль на 100 мс
   digitalWrite(MODEM_RESET, 1);
   Serial2.begin(57600, SERIAL_8N1, RX2_PIN, TX2_PIN); // GSM Serial port
@@ -102,7 +125,11 @@ void setup() {
   delay(500);
   modemPingPong(); // ответ получаем если есть
 
-  // modem.init();
+   modem.init();
+    //mqtt via GSM
+    mqtt.setServer(MQTTserver, 1883);
+  mqtt.setCallback(mqttCallback);
+
   SerialMon.print("Waiting for network...");
   if (!modem.waitForNetwork()) {
     SerialMon.println(" fail");
@@ -122,8 +149,7 @@ void setup() {
   }
   SerialMon.println(" OK");
   if (modem.isGprsConnected()) { SerialMon.println("GPRS connected"); }
-
-
+  */
 
 } // setup()
 
@@ -132,15 +158,17 @@ void setup() {
 /*               LOOP                  */
 /***************************************/
 void loop() {
-  Serial.print(millis() / 1000);
-  Serial.println("\tuptime");
-  modemPingPong(); // GSM modem общение
-  srvGETconnection();
-  lum = analogRead(LUM_PIN);
+  //modemPingPong(); // GSM modem общение
+  //srvGETconnection();
+  // Serial.print(millis() / 1000);
+  // Serial.println("\tuptime");
+  for (int i = 0; i < 5; i++) {
+    lum += analogRead(LUM_PIN);
+    delay(20);
+  }
+  lum = lum / 5;
   Serial.print("lum = ");
   Serial.println(lum);
-  delay(2000);
-
 
   /*  ////////// BME280
     Serial.print("Temp: ");
@@ -184,6 +212,53 @@ void loop() {
       // pms.sleep(); реализовать надо
       */
 
+  if (!wifiMQTTclient.connected()) {
+    reconnectMQTTwifi();
+  }
+  wifiMQTTclient.loop();
+
+  long now = millis();
+  if (now - lastMsg > 10000L) {
+    lastMsg = now;
+
+    // Temperature in Celsius
+    bmeTemp = bme.readTemperature();
+    // Uncomment the next line to set temperature in Fahrenheit
+    // (and comment the previous temperature line)
+    //temperature = 1.8 * bme.readTemperature() + 32; // Temperature in Fahrenheit
+
+    // Convert the value to a char[]
+    char msgArray[8];
+    //dtostrf(bmeTemp, 1, 2, tempString);
+    itoa(bmeTemp, msgArray, 10);
+    Serial.print("Temperature: ");
+    Serial.print(msgArray);
+    wifiMQTTclient.publish("SOGD01/temp", msgArray);
+
+    bmeHum = bme.readHumidity();
+
+    // Convert the value to a char[]
+    //dtostrf(bmeHum, 1, 2, humString);
+    itoa(bmeHum, msgArray, 10);
+    Serial.print("\tHumidity: ");
+    Serial.print(msgArray);
+    wifiMQTTclient.publish("SOGD01/hum", msgArray);
+
+    // converting lumenus to char[]
+    itoa(lum, msgArray, 10);
+    Serial.print("\tLumens: ");
+    Serial.print(msgArray);
+    wifiMQTTclient.publish("SOGD01/lum", msgArray);
+
+      // converting pressure to char[]
+    float pressure = bme.readPressure();        // Читаем давление в [Па]
+    bmePres = pressureToMmHg(pressure);
+    itoa(bmePres, msgArray, 10);
+    Serial.print("\tPressure: ");
+    Serial.print(msgArray);
+    wifiMQTTclient.publish("SOGD01/pres", msgArray);
+  }//sending mqtt via wifi
+  Serial.println();
 
 } // loop()
 
@@ -251,9 +326,79 @@ void mqttCallback(char* topic, byte* payload, unsigned int len) {
 
   // Only proceed if incoming message's topic matches
   if (String(topic) == topicLed) {
-    bool  ledStatus = 0; 
+    bool  ledStatus = 0;
     //ledStatus = !ledStatus;
     Serial.println("now we would toogle led");
     mqtt.publish(topicLedStatus, ledStatus ? "1" : "0");
   }
 }//mqttCallback()
+
+
+void setup_wifi() {
+  delay(10);
+  // We start by connecting to a WiFi network
+  Serial.println();
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
+}//setup_wifi()
+
+
+void wifiMqttCallback(char* topic, byte* message, unsigned int length) {
+  Serial.print("Message arrived on topic: ");
+  Serial.print(topic);
+  Serial.print(". Message: ");
+  String messageTemp;
+
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)message[i]);
+    messageTemp += (char)message[i];
+  }
+  Serial.println();
+
+  // Feel free to add more if statements to control more GPIOs with MQTT
+
+  // If a message is received on the topic esp32/output, you check if the message is either "on" or "off".
+  // Changes the output state according to the message
+  if (String(topic) == "esp32/output") {
+    Serial.print("Changing output to ");
+    if (messageTemp == "on") {
+      Serial.println("on");
+      digitalWrite(LED_PIN, HIGH);
+    } else if (messageTemp == "off") {
+      Serial.println("off");
+      digitalWrite(LED_PIN, LOW);
+    }
+  }
+}//wifiMqttCallback()
+
+
+void reconnectMQTTwifi() {
+  // Loop until we're reconnected MQTTwifi
+  while (!wifiMQTTclient.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Attempt to connect
+    if (wifiMQTTclient.connect("ESP8266Client", "mqtt-user", "1234567890")) {
+      Serial.println("connected");
+      // Subscribe
+      wifiMQTTclient.subscribe("esp32/output");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(wifiMQTTclient.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}//reconnectMQTTwifi()
