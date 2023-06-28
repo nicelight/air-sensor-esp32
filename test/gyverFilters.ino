@@ -87,14 +87,14 @@ void loop() {
       //  Serial.print("PM 10.0 (ug/m3): ");
       r_pm10[i] = data.PM_AE_UG_10_0;
       Serial.print(r_pm10[i]);
-      //печатаем отфильтрованные 
+/*       //печатаем отфильтрованные 
       Serial.print(",");
       Serial.print(pm1);
       Serial.print(",");
       Serial.print(pm2);
       Serial.print(",");
       Serial.print(pm10);
-      Serial.println();
+      Serial.println(); */
     } else {
       Serial.println("No data.");
     }
@@ -126,7 +126,7 @@ void filteringPm1() {
   pm1 = sum / 16;
 }//filteringPm1()
 
-//пузырьковая сортировка pm1
+//пузырьковая сортировка pm2
 void filteringPm2() {
   for (int j = 0; j + 1 < 20; ++j) {
     for (int i = 0; i + 1 < 20 - 1; ++i) {
@@ -145,7 +145,7 @@ void filteringPm2() {
   pm2 = sum / 16;
 }//filteringPm2
 
-//пузырьковая сортировка pm1
+//пузырьковая сортировка pm10
 void filteringPm10() {
   for (int j = 0; j + 1 < 20; ++j) {
     for (int i = 0; i + 1 < 20 - 1; ++i) {
