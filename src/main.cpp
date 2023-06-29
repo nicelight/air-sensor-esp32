@@ -69,10 +69,12 @@ PubSubClient  mqtt(client);
 const char* mqtt_server = "95.142.87.232";
 WiFiClient espClient;
 PubSubClient wifiMQTTclient(espClient);
-long lastMsg = 0;
+long lastMsg1 = 0;
+long lastMsg2 = 0;
 char msg[50];
 int value = 0;
 
+bool forceSend = 1; // флаг для однократной отправки 
 
 /***************************************/
 /*     FUNCTION     DECLARATIONS       */
@@ -81,7 +83,7 @@ int value = 0;
 void modemPingPong();
 void srvGETconnection();
 void mqttCallback(char* topic, byte* payload, unsigned int len);
-void setup_wifi();
+void keep_wifi_connection();
 void wifiMqttCallback(char* topic, byte* message, unsigned int length);
 void reconnectMQTTwifi();
 void filteringPm1();
@@ -103,22 +105,17 @@ void setup() {
   Serial.begin(115200);
 
   Serial1.begin(9600, SERIAL_8N1, RX1_PIN, TX1_PIN);  // PMS Serial port.   Rx = 4, Tx = 5 will work for ESP32, S2, S3 and C3
-  // Serial.println("Waking up, wait 30 seconds for stable readings...");
-  // pms.wakeUp(); // надо реализовать вручную
-  // delay(30000);
 
   bme.begin();
 
-
-  setup_wifi();
+  keep_wifi_connection();
 
   wifiMQTTclient.setServer(mqtt_server, 1883);
   wifiMQTTclient.setCallback(wifiMqttCallback);
 
   pinMode(LED_PIN, OUTPUT);
-  Serial.println("Waking up, wait 30 seconds for stable readings...");
-  pms.wakeUp();
-  delay(30000);
+  digitalWrite(LED_PIN, 0);
+
 
   /* // инициализация GSM модема
    modem.setBaud(57600);
@@ -170,73 +167,20 @@ void loop() {
   //srvGETconnection();
   // Serial.print(millis() / 1000);
   // Serial.println("\tuptime");
+  keep_wifi_connection();
   if (!wifiMQTTclient.connected()) {
     reconnectMQTTwifi();
   }
   wifiMQTTclient.loop();
   delay(1000);
-  Serial.println(millis()/1000L);
-  
-  // отправка данных на MQTT брокер по wifi
+  Serial.println(millis() / 1000L);
+
+  // отправка данных BME на MQTT брокер по wifi раз в минуту
   long now = millis();
-  if (now - lastMsg > 10000L) {
-    lastMsg = now;
-
-    pms.wakeUp();
-    digitalWrite(PMS_SET_PIN, 1); // 1 работаем, ноль спим
-    delay(3000);
-    memset(r_pm1, 0, 20); // обнуляем массивы
-    memset(r_pm2, 0, 20);
-    memset(r_pm10, 0, 20);
-    // выборка из 20 значений,  примерно на 20 секунд
-    Serial.println("start readings PMS..");
-    for (int i = 0; i < 20; i++) {
-      pms.requestRead();
-      //  Serial.println("Wait max. 1 second for read...");
-      if (pms.readUntil(data)) {
-        r_pm1[i] = data.PM_AE_UG_1_0;
-        r_pm2[i] = data.PM_AE_UG_2_5;
-        r_pm10[i] = data.PM_AE_UG_10_0;
-        //  Serial.print("PM 1.0 (ug/m3): ");
-        //  Serial.print(r_pm1[i]);
-        //  Serial.print("PM 2.5 (ug/m3): ");
-        //  Serial.print(r_pm2[i]);
-        //  Serial.print("PM 10.0 (ug/m3): ");
-        //  Serial.print(r_pm10[i]);
-      } else {
-        Serial.println("No data.");
-      }
-    }//for
-    //фильтрация значений массивов
-    Serial.println("filtering PMS");
-    delay(1);
-    filteringPm1();
-    delay(1);
-    filteringPm2();
-    delay(1);
-    filteringPm10();
-    delay(1);
-
-    char msgArray[8];
-    itoa(pm1, msgArray, 10);
-    Serial.print("PM 1.0 (ug/m3): ");
-    Serial.print(msgArray);
-    wifiMQTTclient.publish("SOGD01/pm1", msgArray);
-
-    itoa(pm2, msgArray, 10);
-    Serial.print("PM 2.5 (ug/m3): ");
-    Serial.print(msgArray);
-    wifiMQTTclient.publish("SOGD01/pm2", msgArray);
-
-    itoa(pm10, msgArray, 10);
-    Serial.print("PM 2.5 (ug/m3): ");
-    Serial.print(msgArray);
-    wifiMQTTclient.publish("SOGD01/pm10", msgArray);
-    Serial.println();
-    pms.sleep();
-    digitalWrite(PMS_SET_PIN, 0); // 1 работаем, ноль спим
-
+  if ((now - lastMsg1 > 60000L) || forceSend) {
+    lastMsg1 = now;
     //BME280 data
+    char msgArray[16];
     bmeTemp = bme.readTemperature();
     // Convert the value to a char[]
     dtostrf(bmeTemp, 1, 2, msgArray); //if bmeTemp is float 
@@ -272,10 +216,77 @@ void loop() {
     Serial.print("\tLumens: ");
     Serial.print(msgArray);
     wifiMQTTclient.publish("SOGD01/lum", msgArray);
-    Serial.println();
+    Serial.println("\t\tbme data sent via mqtt");
 
   }//sending mqtt via wifi once per 30 sec
 
+  //отправка PMS раз в 10 минут
+  if ((now - lastMsg2 > 600000L) || forceSend) {
+    lastMsg2 = now;
+    forceSend = 0;
+
+    pms.wakeUp();
+    digitalWrite(PMS_SET_PIN, 1); // 1 работаем, ноль спим
+    //прогрев 30 секунд
+    Serial.println("Waking up, wait 30 seconds for stable readings...");
+    digitalWrite(LED_PIN, HIGH);
+    delay(30000);
+    memset(r_pm1, 0, 20); // обнуляем массивы
+    memset(r_pm2, 0, 20);
+    memset(r_pm10, 0, 20);
+    // выборка из 20 значений,  примерно на 20 секунд
+    Serial.println("start readings PMS..");
+    for (int i = 0; i < 20; i++) {
+      pms.requestRead();
+      //  Serial.println("Wait max. 1 second for read...");
+      if (pms.readUntil(data)) {
+        r_pm1[i] = data.PM_AE_UG_1_0;
+        r_pm2[i] = data.PM_AE_UG_2_5;
+        r_pm10[i] = data.PM_AE_UG_10_0;
+        //  Serial.print("PM 1.0 (ug/m3): ");
+        //  Serial.print(r_pm1[i]);
+        //  Serial.print("PM 2.5 (ug/m3): ");
+        //  Serial.print(r_pm2[i]);
+        //  Serial.print("PM 10.0 (ug/m3): ");
+        //  Serial.print(r_pm10[i]);
+      } else {
+        Serial.println("No data.");
+      }
+    }//for
+    //фильтрация значений массивов
+    Serial.println("filtering PMS");
+    delay(1);
+    filteringPm1();
+    delay(1);
+    filteringPm2();
+    delay(1);
+    filteringPm10();
+    delay(1);
+    digitalWrite(LED_PIN, LOW);
+
+    if (!wifiMQTTclient.connected()) {
+      reconnectMQTTwifi();
+    }
+    char msgArray[16];
+    itoa(pm1, msgArray, 10);
+    Serial.print("PM 1.0 (ug/m3): ");
+    Serial.print(msgArray);
+    wifiMQTTclient.publish("SOGD01/pm1", msgArray);
+
+    itoa(pm2, msgArray, 10);
+    Serial.print("\tPM 2.5 (ug/m3): ");
+    Serial.print(msgArray);
+    wifiMQTTclient.publish("SOGD01/pm2", msgArray);
+
+    itoa(pm10, msgArray, 10);
+    Serial.print("\tPM 2.5 (ug/m3): ");
+    Serial.print(msgArray);
+    wifiMQTTclient.publish("SOGD01/pm10", msgArray);
+    Serial.println();
+    pms.sleep();
+    digitalWrite(PMS_SET_PIN, 0); // 1 работаем, ноль спим
+    Serial.println("\t PMS data sent via mqtt");
+  }// pms Send data
 
 } // loop()
 
@@ -335,7 +346,7 @@ void srvGETconnection() {
 
 //подпись на топики
 void mqttCallback(char* topic, byte* payload, unsigned int len) {
-  SerialMon.print("Message arrived [");
+  SerialMon.print("got MQTT msg [");
   SerialMon.print(topic);
   SerialMon.print("]: ");
   SerialMon.write(payload, len);
@@ -351,25 +362,48 @@ void mqttCallback(char* topic, byte* payload, unsigned int len) {
 }//mqttCallback()
 
 
-void setup_wifi() {
+void keep_wifi_connection() {
   delay(10);
-  // We start by connecting to a WiFi network
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
+  if (WiFi.status() != WL_CONNECTED) {
+    // We start by connecting to a WiFi network
+    Serial.println();
+    Serial.print("Connecting to ");
+    Serial.println(ssid);
 
-  WiFi.begin(ssid, password);
-
-  while (WiFi.status() != WL_CONNECTED) {
+    WiFi.begin(ssid, password);
+    byte counter = 0;
+    while (WiFi.status() != WL_CONNECTED) {
+      digitalWrite(LED_PIN, 1);
+      delay(400);
+      digitalWrite(LED_PIN, 0);
+      delay(100);
+      Serial.print(".");
+      //перезагрузимся если не конектится
+      counter++;
+      if (counter > 60) {
+        Serial.print("wifi unavaliable.\t\t\tRESTART ESP32 ! ");
+        ESP.restart();
+      }
+    }// while not con
     delay(500);
-    Serial.print(".");
-  }
-
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-}//setup_wifi()
+    Serial.println("");
+    Serial.println("WiFi connected");
+    Serial.println("IP address: ");
+    Serial.println(WiFi.localIP());
+    digitalWrite(LED_PIN, 1);
+    delay(200);
+    digitalWrite(LED_PIN, 0);
+    delay(100);
+    digitalWrite(LED_PIN, 1);
+    delay(200);
+    digitalWrite(LED_PIN, 0);
+    delay(100);
+    digitalWrite(LED_PIN, 1);
+    delay(200);
+    digitalWrite(LED_PIN, 0);
+    delay(100);
+  }// if not connected
+}//keep_wifi_connection()
 
 
 void wifiMqttCallback(char* topic, byte* message, unsigned int length) {
@@ -388,13 +422,18 @@ void wifiMqttCallback(char* topic, byte* message, unsigned int length) {
 
   // If a message is received on the topic esp32/output, you check if the message is either "on" or "off".
   // Changes the output state according to the message
-  if (String(topic) == "esp32/output") {
-    Serial.print("Changing output to ");
+  if (String(topic) == "SOGD01/forced") {
+    Serial.print("forcing send data ");
     if (messageTemp == "on") {
       Serial.println("on");
       digitalWrite(LED_PIN, HIGH);
+      delay(500);
+      digitalWrite(LED_PIN, LOW);
+      forceSend = 1;
     } else if (messageTemp == "off") {
       Serial.println("off");
+      digitalWrite(LED_PIN, HIGH);
+      delay(500);
       digitalWrite(LED_PIN, LOW);
     }
   }
@@ -404,18 +443,32 @@ void wifiMqttCallback(char* topic, byte* message, unsigned int length) {
 void reconnectMQTTwifi() {
   // Loop until we're reconnected MQTTwifi
   while (!wifiMQTTclient.connected()) {
+    digitalWrite(LED_PIN, 1);
+    delay(300);
+    digitalWrite(LED_PIN, 0);
     Serial.print("Attempting MQTT connection...");
     // Attempt to connect
     if (wifiMQTTclient.connect("ESP8266Client", "mqtt-user", "1234567890")) {
       Serial.println("connected");
       // Subscribe
-      wifiMQTTclient.subscribe("esp32/output");
+      wifiMQTTclient.subscribe("SOGD01/forced");
+      digitalWrite(LED_PIN, 1);
+      delay(200);
+      digitalWrite(LED_PIN, 0);
+      delay(100);
+      digitalWrite(LED_PIN, 1);
+      delay(200);
+      digitalWrite(LED_PIN, 0);
+      delay(100);
+      digitalWrite(LED_PIN, 1);
+      delay(200);
+      digitalWrite(LED_PIN, 0);
     } else {
       Serial.print("failed, rc=");
       Serial.print(wifiMQTTclient.state());
       Serial.println(" try again in 5 seconds");
       // Wait 5 seconds before retrying
-      delay(5000);
+      delay(3000);
     }
   }
 }//reconnectMQTTwifi()
